@@ -1,12 +1,15 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 
 export interface Model { name: string }
+export interface ChatMessage { role: 'user' | 'assistant'; content: string }
 export interface GenerateRequest {
   baseUrl: string;
   model: string;
   prompt: string;
   scene: string;
   notes: string;
+  history: ChatMessage[];
+  contextTokens: number;
 }
 function requireDesktop() {
   if (!isTauri()) throw new Error('Open the desktop app with npm run tauri dev to connect to Ollama.');

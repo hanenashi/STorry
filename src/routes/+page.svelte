@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { generate, listModels, type Model } from '$lib/ollama';
+  import { onMount, tick } from 'svelte';
+  import { generate, listModels, type Model, type ChatMessage } from '$lib/ollama';
+  import { loadDraft, STORAGE_KEY } from '$lib/draft';
   import '../app.css';
   let title = $state('Untitled story');
   let scene = $state('');
@@ -8,41 +9,53 @@
   let baseUrl = $state('http://127.0.0.1:11434');
   let model = $state('');
   let prompt = $state('');
-  let suggestion = $state('');
-  let previousScene = $state<string | null>(null);
+  let messages = $state<ChatMessage[]>([]);
+  let pendingPrompt = $state('');
+  let contextTokens = $state(16384);
   let models = $state<Model[]>([]);
-  let status = $state('Connect to Ollama to load your models.');
+  let status = $state('Connecting to Ollama…');
   let error = $state('');
   let connecting = $state(false);
   let generating = $state(false);
   let ready = $state(false);
-  let saveStatus = $state('Draft stored on this device');
-  const words = $derived(scene.trim() ? scene.trim().split(/\s+/).length : 0);
+  let canSave = $state(true);
+  let saveStatus = $state('Saved on this device');
+  let view = $state<'chat' | 'draft'>('chat');
+  let chatEnd = $state<HTMLDivElement>();
+  const words = $derived([scene, ...messages.filter(m => m.role === 'assistant').map(m => m.content)].join(' ').trim().split(/\s+/).filter(Boolean).length);
 
   onMount(() => {
     try {
-      const stored = localStorage.getItem('storry.draft.v1');
-      if (stored) {
-        const draft = JSON.parse(stored);
-        if (typeof draft.title === 'string') title = draft.title;
-        if (typeof draft.scene === 'string') scene = draft.scene;
-        if (typeof draft.notes === 'string') notes = draft.notes;
-        if (typeof draft.baseUrl === 'string') baseUrl = draft.baseUrl;
-        if (typeof draft.model === 'string') model = draft.model;
-      }
-    } catch { saveStatus = 'Saved draft could not be loaded'; }
-    ready = true;
-  });
-  $effect(() => {
-    const draft = JSON.stringify({ title, scene, notes, baseUrl, model });
-    if (ready) {
-      const timer = setTimeout(() => {
-        try { localStorage.setItem('storry.draft.v1', draft); saveStatus = 'Draft stored on this device'; }
-        catch { saveStatus = 'Draft could not be saved — export a copy'; }
-      }, 250);
-      return () => clearTimeout(timer);
+      const draft = loadDraft(localStorage);
+      title = draft.title ?? title;
+      scene = draft.scene ?? scene;
+      notes = draft.notes ?? notes;
+      baseUrl = draft.baseUrl ?? baseUrl;
+      model = draft.model ?? model;
+      prompt = draft.prompt ?? prompt;
+      messages = draft.messages ?? messages;
+      contextTokens = draft.contextTokens ?? contextTokens;
+    } catch {
+      canSave = false;
+      saveStatus = 'Saved data could not be loaded. It has been kept intact; autosave is paused.';
     }
+    ready = true;
+    void connect();
+    void scrollToLatest();
   });
+
+  function persist() {
+    if (!canSave) return;
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ title, scene, notes, baseUrl, model, prompt, messages, contextTokens }));
+      saveStatus = 'Saved on this device';
+    } catch { saveStatus = 'Could not save — export a copy before closing'; }
+  }
+  $effect(() => {
+    // Save completed turns and the current prompt. The v1 draft remains as a migration backup.
+    if (ready) persist();
+  });
+
   async function connect() {
     connecting = true; error = ''; models = [];
     try {
@@ -52,20 +65,30 @@
     } catch (cause) { model = ''; status = 'Ollama unavailable'; error = String(cause); }
     finally { connecting = false; }
   }
+
+  async function scrollToLatest() {
+    await tick();
+    chatEnd?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+  }
   async function ask() {
-    generating = true; error = '';
-    try { suggestion = await generate({ baseUrl, model, prompt, scene, notes }); }
-    catch (cause) { error = String(cause); }
-    finally { generating = false; }
+    if (generating || connecting || !model || !prompt.trim() || !canSave) return;
+    const request = prompt.trim();
+    generating = true; error = ''; pendingPrompt = request;
+    view = 'chat';
+    await scrollToLatest();
+    try {
+      const reply = await generate({ baseUrl, model, prompt: request, scene, notes, history: messages, contextTokens });
+      messages = [...messages, { role: 'user', content: request }, { role: 'assistant', content: reply }];
+      prompt = '';
+      persist();
+    } catch (cause) { error = String(cause); }
+    finally { generating = false; pendingPrompt = ''; await scrollToLatest(); }
   }
-  function insert() {
-    previousScene = scene;
-    scene = [scene.trimEnd(), suggestion].filter(Boolean).join('\n\n');
-    suggestion = '';
-  }
+
   function exportStory() {
-    const blob = new Blob([`# ${title}\n\n${scene}\n`], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
+    const conversation = messages.map(m => `## ${m.role === 'user' ? 'You' : 'STorry'}\n\n${m.content}`).join('\n\n');
+    const content = [`# ${title}`, scene, conversation].filter(Boolean).join('\n\n');
+    const url = URL.createObjectURL(new Blob([content + '\n'], { type: 'text/markdown;charset=utf-8' }));
     const link = document.createElement('a');
     link.href = url;
     link.download = `${title.replace(/[^a-zA-Z0-9 _-]/g, '_').trim() || 'story'}.md`;
@@ -82,22 +105,60 @@
 <main>
   <aside class="notes-panel">
     <h2>Story</h2>
-    <label for="title">Title</label><input id="title" bind:value={title} />
+    <label for="title">Title</label><input id="title" bind:value={title} disabled={generating || !canSave} />
     <label for="notes">Story notes</label>
-    <p class="hint">Characters, setting, tone, and things to remember.</p>
-    <textarea id="notes" bind:value={notes} placeholder="Who is this story about?" class="notes"></textarea>
-    <p class="hint">This first skeleton keeps one story and one scene on this device.</p>
+    <p class="hint">Keep characters, setting, and lasting rules here. Included with every message.</p>
+    <textarea id="notes" bind:value={notes} disabled={generating || !canSave} placeholder="Who is this story about?" class="notes"></textarea>
+    <p class="hint">Your conversation, notes, and opening draft are saved together on this device.</p>
   </aside>
-  <section class="manuscript" aria-label="Manuscript">
-    <div class="section-header"><h1>Scene one</h1><span>{words} words</span></div>
-    <textarea aria-label="Scene text" class="scene" bind:value={scene} placeholder="Every story starts somewhere…"></textarea>
-    <footer><span role="status">{saveStatus}</span>
-      {#if previousScene !== null}<button onclick={() => { scene = previousScene ?? ''; previousScene = null; }}>Undo last insertion</button>{/if}
-    </footer>
+
+  <section class="workspace" aria-label="Story workspace">
+    <div class="section-header">
+      <div class="view-tabs" aria-label="Workspace view">
+        <button class:active={view === 'chat'} aria-pressed={view === 'chat'} onclick={() => { view = 'chat'; void scrollToLatest(); }}>Story conversation</button>
+        <button class:active={view === 'draft'} aria-pressed={view === 'draft'} onclick={() => view = 'draft'}>Opening draft</button>
+      </div>
+      <span>{words} words</span>
+    </div>
+    {#if view === 'draft'}
+      <p class="hint">Your existing writing stays editable here and is included in the conversation.</p>
+      <textarea aria-label="Scene text" class="scene" bind:value={scene} disabled={generating || !canSave} placeholder="Every story starts somewhere…"></textarea>
+    {:else}
+      <div class="chat-history" role="log" aria-label="Story conversation" aria-busy={generating}>
+        {#if scene}<article class="chat-message opening"><h3>Opening draft</h3><div class="prose">{scene}</div></article>{/if}
+        {#if !messages.length && !generating}
+          {#if scene}
+            <p class="hint">Your draft is ready. Ask for the next passage or tell STorry what to change.</p>
+          {:else}
+            <div class="chat-empty"><h1>Where does your story begin?</h1><p>Start a scene or explore an idea. Then ask for twists, changes, or the next passage.</p></div>
+          {/if}
+        {/if}
+        {#each messages as message, index (index)}
+          <article class="chat-message" class:user-message={message.role === 'user'}>
+            <h3>{message.role === 'user' ? 'You' : 'STorry'}</h3><div class="prose">{message.content}</div>
+          </article>
+        {/each}
+        {#if generating}
+          <article class="chat-message user-message"><h3>You</h3><div class="prose">{pendingPrompt}</div></article>
+          <p class="writing-status" role="status">STorry is writing…</p>
+        {/if}
+        <div bind:this={chatEnd}></div>
+      </div>
+      <form class="composer" onsubmit={(event) => { event.preventDefault(); void ask(); }}>
+        <label for="prompt">Continue the story or suggest a change</label>
+        <textarea id="prompt" bind:value={prompt} disabled={generating || !canSave} placeholder="Continue, but have her recognize the stranger. Keep it understated." rows="3" onkeydown={(event) => {
+          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) { event.preventDefault(); void ask(); }
+        }}></textarea>
+        <div class="composer-actions"><span class="hint">Remembers earlier turns · Ctrl+Enter to send</span><button type="submit" class="primary" disabled={generating || connecting || !model || !prompt.trim() || !canSave}>{generating ? 'Writing…' : 'Send'}</button></div>
+        {#if error}<p class="error" role="alert">{error}</p>{/if}
+      </form>
+    {/if}
+    <footer><span role="status">{saveStatus}</span></footer>
   </section>
+
   <aside class="assistant-panel">
-    <h2>Writing assistant</h2>
-    <label for="server">Ollama server</label>
+    <h2>Ollama</h2>
+    <label for="server">Server</label>
     <div class="connection"><input id="server" bind:value={baseUrl} disabled={connecting || generating} /><button onclick={connect} disabled={connecting || generating}>{connecting ? 'Connecting…' : 'Connect'}</button></div>
     <p class="hint" role="status">{status}</p>
     <label for="model">Model</label>
@@ -105,17 +166,11 @@
       {#if !models.length}<option value="">Connect to load models</option>{/if}
       {#each models as entry}<option value={entry.name}>{entry.name}</option>{/each}
     </select>
-    <label for="prompt">What would you like to write?</label>
-    <textarea id="prompt" bind:value={prompt} placeholder="Continue this scene with a quiet sense of unease…" rows="4"></textarea>
-    <p class="hint">Includes your current scene and story notes.</p>
-    <button class="primary" onclick={ask} disabled={generating || connecting || !model || !prompt.trim()}>{generating ? 'Writing…' : 'Generate suggestion'}</button>
-    {#if error}<p class="error" role="alert">{error}</p>{/if}
-    <section class="suggestion" aria-label="Suggestion" aria-busy={generating}>
-      <h3>Suggestion</h3>
-      {#if suggestion}
-        <div class="prose">{suggestion}</div>
-        <div class="actions"><button class="primary" onclick={insert} disabled={generating}>Insert at end</button><button onclick={() => suggestion = ''} disabled={generating}>Discard</button></div>
-      {:else}<p class="hint">Your next possibility will appear here. Insert it when it feels right.</p>{/if}
-    </section>
+    <label for="memory">Memory size</label>
+    <select id="memory" bind:value={contextTokens} disabled={generating}>
+      <option value={8192}>8K tokens</option><option value={16384}>16K tokens</option><option value={32768}>32K tokens</option>
+    </select>
+    <p class="hint">Larger memory fits more story but uses more RAM or VRAM. Earlier turns are sent with each request; if they no longer fit, STorry asks you to increase memory.</p>
+    {#if view === 'draft' && error}<p class="error" role="alert">{error}</p>{/if}
   </aside>
 </main>

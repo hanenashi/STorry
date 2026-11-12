@@ -22,23 +22,29 @@ Ollama is installed separately at `C:\AI\Ollama\ollama.exe` on this machine. STo
 & 'C:\AI\Ollama\ollama.exe' serve
 ```
 
-Click **Connect**, select an installed model, write a prompt, and generate a suggestion. Suggestions only enter the manuscript when you click **Insert at end**. The initial environment has `gemma3:4b` installed.
+STorry connects automatically on launch. Select a model, write a prompt, and click **Send** (or press Ctrl+Enter). Replies append directly to the story conversation. Ask for the next passage or a change in tone, events, or characters; each request includes the previous conversation. The initial environment has `gemma3:4b` installed.
 
 ## Current skeleton
 
-- One editable scene, title, word count, and story notes.
-- Draft and connection settings autosaved in the webview's local storage (250 ms debounce).
+- A persistent story conversation with user prompts and assistant replies.
+- An editable **Opening draft**, title, word count, and story notes.
+- Conversation, draft, current prompt, memory size, and connection settings autosaved in the webview's local storage.
 - Rust-side Ollama model discovery and chat requests, with connection and generation errors.
-- Separate suggestion preview, discard, and one-level undo of insertion.
-- Markdown export through the webview download mechanism.
+- Full ordered conversation history sent to Ollama, alongside the current opening draft and notes.
+- 8K / 16K / 32K context settings (16K default), with a conservative byte-based input budget and a 2K-token output allowance. Oversized input is rejected with an actionable error instead of silently dropping old turns. This is not exact token counting; it intentionally errs on the side of keeping history intact. The model must support the chosen context size.
+- Markdown export of the opening draft and conversation, with speaker labels.
+- Failed requests keep the prompt ready to retry without adding a false assistant reply.
 
-This is a development foundation. It does not yet implement SQLite projects, chapter management, durable revision history, streaming, cancellation, or selection-based rewriting. Generation waits for a complete response, with a five-minute timeout. The prompt contains the entire scene and story notes; there is no automatic context budgeting yet. Local storage is not a project file or backup; use export for copies. Suggestions and prompts are not persisted. Browser preview supports editing, but connecting to Ollama requires the desktop app.
+This is a development foundation. It does not yet implement SQLite projects, chapter management, durable revision history, streaming, cancellation, automatic memory summaries, or selection-based rewriting. Generation waits for a complete response, with a five-minute timeout. Local storage is not a project file or backup; use export for copies. Browser preview supports editing, but connecting to Ollama requires the desktop app.
+
+Existing `storry.draft.v1` data migrates to `storry.draft.v2` without deleting the original. The old scene remains editable in **Opening draft** and is shown at the start of the conversation. If saved data is invalid, autosave pauses rather than overwriting it. Story notes are useful for lasting facts and changes that must remain explicit; model recall still depends on the chosen model.
 
 ## Layout
 
 ```text
 src/routes/+page.svelte    Writing workspace and draft state
 src/lib/ollama.ts          Typed Tauri command bridge
+src/lib/draft.ts           Saved conversation validation and v1 migration
 src/app.css                Shared workspace styles
 src-tauri/src/ollama.rs    Ollama HTTP client and commands
 src-tauri/src/lib.rs       Desktop application entry point
