@@ -66,8 +66,8 @@ pub enum Role {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ChatMessage {
-    role: Role,
-    content: String,
+    pub(crate) role: Role,
+    pub(crate) content: String,
 }
 
 fn conversation(

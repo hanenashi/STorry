@@ -22,22 +22,25 @@ Ollama is installed separately at `C:\AI\Ollama\ollama.exe` on this machine. STo
 & 'C:\AI\Ollama\ollama.exe' serve
 ```
 
-STorry connects automatically on launch. Select a model, write a prompt, and click **Send** (or press Ctrl+Enter). Replies append directly to the story conversation. Ask for the next passage or a change in tone, events, or characters; each request includes the previous conversation. The initial environment has `gemma3:4b` installed.
+STorry starts at **Your stories**. Create a **New story** or **Open** an existing one. Select a model, write a prompt, and click **Send** (or press Ctrl+Enter). Replies append directly to the story conversation. Ask for the next passage or a change in tone, events, or characters; each request includes that story's previous conversation. Ollama connects automatically. The initial environment has `gemma3:4b` installed.
 
 ## Current skeleton
 
 - A persistent story conversation with user prompts and assistant replies.
 - An editable **Opening draft**, title, word count, and story notes.
-- Conversation, draft, current prompt, memory size, and connection settings autosaved in the webview's local storage.
+- A searchable story library with New, Open, Rename, and confirmed Delete.
+- Independent conversation, draft, notes, current prompt, memory size, and connection settings per story, stored in SQLite.
+- Automatic saves after 400 ms of inactivity, explicit **Save**, and save-before-switch/close. A failed save keeps the editor open. Closing during generation saves the pending prompt; the unfinished response is not committed.
+- **Save a copy** downloads a `.storry.json` file including the full story and conversation. **Import story** loads it as a new library entry without replacing an existing story. Imports and individual saves are limited to 10 MB. Deleting a story removes its library entry permanently, but does not remove exported copies.
 - Rust-side Ollama model discovery and chat requests, with connection and generation errors.
 - Full ordered conversation history sent to Ollama, alongside the current opening draft and notes.
 - 8K / 16K / 32K context settings (16K default), with a conservative byte-based input budget and a 2K-token output allowance. Oversized input is rejected with an actionable error instead of silently dropping old turns. This is not exact token counting; it intentionally errs on the side of keeping history intact. The model must support the chosen context size.
 - Markdown export of the opening draft and conversation, with speaker labels.
 - Failed requests keep the prompt ready to retry without adding a false assistant reply.
 
-This is a development foundation. It does not yet implement SQLite projects, chapter management, durable revision history, streaming, cancellation, automatic memory summaries, or selection-based rewriting. Generation waits for a complete response, with a five-minute timeout. Local storage is not a project file or backup; use export for copies. Browser preview supports editing, but connecting to Ollama requires the desktop app.
+This is a development foundation. It does not yet implement chapter management, revision history, streaming, cancellation, automatic memory summaries, or selection-based rewriting. Generation waits for a complete response, with a five-minute timeout. The story library and Ollama connection require the desktop app; plain browser preview does not expose local files.
 
-Existing `storry.draft.v1` data migrates to `storry.draft.v2` without deleting the original. The old scene remains editable in **Opening draft** and is shown at the start of the conversation. If saved data is invalid, autosave pauses rather than overwriting it. Story notes are useful for lasting facts and changes that must remain explicit; model recall still depends on the chosen model.
+The database is `stories.sqlite3` in Tauri's application data directory (`%APPDATA%\com.storry.app` on Windows). Existing `storry.draft.v2` data, or the older v1 draft, is imported once without deleting its local-storage backup. A migration marker prevents a deliberately deleted story from reappearing. The old scene remains editable in **Opening draft**. Database writes check a story revision so another window cannot silently overwrite newer changes. Story notes are useful for lasting facts and changes that must remain explicit; model recall still depends on the chosen model. Use **Save a copy** for portable backups.
 
 ## Layout
 
@@ -45,8 +48,12 @@ Existing `storry.draft.v1` data migrates to `storry.draft.v2` without deleting t
 src/routes/+page.svelte    Writing workspace and draft state
 src/lib/ollama.ts          Typed Tauri command bridge
 src/lib/draft.ts           Saved conversation validation and v1 migration
+src/lib/library.ts         Typed library command bridge
+src/lib/StoryLibrary.svelte Library screen
+src/lib/StoryActionDialog.svelte New, rename, and delete dialogs
 src/app.css                Shared workspace styles
 src-tauri/src/ollama.rs    Ollama HTTP client and commands
+src-tauri/src/storage.rs   SQLite story storage and legacy migration
 src-tauri/src/lib.rs       Desktop application entry point
 ```
 
@@ -65,7 +72,7 @@ npm run tauri build
 
 ## Next steps
 
-1. SQLite projects, scenes, story notes, and revision snapshots.
+1. Multiple scenes per story and revision snapshots.
 2. Streaming generation with cancellation.
 3. Selection-based rewrites and explicit context selection.
 4. Windows installer branding and release pipeline.
