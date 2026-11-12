@@ -4,6 +4,10 @@ A small Windows 11 writing app using Tauri 2, Rust, Svelte 5, TypeScript, and Sv
 
 ## Run
 
+Use the **STorry** desktop shortcut or double-click `Launch-STorry.cmd` in this repository to open the locally built app without a development server. Both use `Launch-STorry.ps1`. After changing application code, refresh that desktop build with `npm run tauri build -- --debug --no-bundle`.
+
+For development with live updates:
+
 ```powershell
 cd C:\GIT\STorry
 npm install
