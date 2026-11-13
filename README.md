@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="STorricon.png" alt="STorry llama mascot with a monocle and bow tie" width="500">
+</p>
+
 # STorry
 
 A small Windows 11 writing app using Tauri 2, Rust, Svelte 5, TypeScript, and SvelteKit's static adapter.
